@@ -204,8 +204,8 @@ class TestQueryRequestFallback:
             # Verify _query was called only once (no fallback for weak error without missing template)
             assert mock_query.call_count == 1
 
-    def test_multiple_runtime_errors_raise_combined_error(self):
-        """Test that multiple RuntimeErrors from different endpoints raise a combined error."""
+    def test_authentication_error_no_fallback(self):
+        """Test that authentication errors (401) do NOT fallback to chat completions."""
         request = Request(
             "http://engine.test",
             "model",
@@ -216,15 +216,10 @@ class TestQueryRequestFallback:
         )
 
         with patch.object(request, '_query') as mock_query:
-            # First call is a regular error (not missing chat template)
-            # Second call raises a different error
-            mock_query.side_effect = [
-                RuntimeError("First endpoint error"),
-                RuntimeError("Second endpoint error"),
-            ]
+            # Mock an authentication error (401)
+            mock_query.side_effect = RuntimeError("GET http://engine.test/v1 failed (HTTP 401): Unauthorized")
 
-            # This should raise the first error since it's not a missing chat template
-            with pytest.raises(RuntimeError, match="First endpoint error"):
+            with pytest.raises(RuntimeError, match="GET http://engine.test/v1 failed"):
                 request._query_with_fallback({
                     "completions_only": False,
                     "model": "model",
@@ -233,8 +228,99 @@ class TestQueryRequestFallback:
                     "timeout": 5.0,
                     "chat_first": False,
                 })
-            # Verify _query was called only once (no fallback due to first error)
+            # Verify _query was called only once (no fallback for auth error)
             assert mock_query.call_count == 1
+
+    def test_server_error_no_fallback(self):
+        """Test that server errors (500) do NOT fallback to chat completions."""
+        request = Request(
+            "http://engine.test",
+            "model",
+            max_tokens=128,
+            timeout=5.0,
+            completions_only=False,
+            chat_first=False,
+        )
+
+        with patch.object(request, '_query') as mock_query:
+            # Mock a server error (500)
+            mock_query.side_effect = RuntimeError("GET http://engine.test/v1 failed (HTTP 500): Internal Server Error")
+
+            with pytest.raises(RuntimeError, match="GET http://engine.test/v1 failed"):
+                request._query_with_fallback({
+                    "completions_only": False,
+                    "model": "model",
+                    "prompt": "test",
+                    "max_tokens": 128,
+                    "timeout": 5.0,
+                    "chat_first": False,
+                })
+            # Verify _query was called only once (no fallback for server error)
+            assert mock_query.call_count == 1
+
+    def test_http_404_fallback(self):
+        """Test that HTTP 404 errors DO fallback to chat completions."""
+        request = Request(
+            "http://engine.test",
+            "model",
+            max_tokens=128,
+            timeout=5.0,
+            completions_only=False,
+            chat_first=False,
+        )
+
+        with patch.object(request, '_query') as mock_query:
+            # First call returns HTTP 404
+            # Second call succeeds
+            mock_query.side_effect = [
+                RuntimeError("GET http://engine.test/v1 failed (HTTP 404): Not Found"),
+                {"answer": "Hello", "prompt_tokens": 10, "output_tokens": 5, "ttft_ms": 100.0, "tpot_ms_per_token": 10.0, "total_latency_ms": 200.0, "throughput_tokens_per_s": 0.5}
+            ]
+
+            result = request._query_with_fallback({
+                "completions_only": False,
+                "model": "model",
+                "prompt": "test",
+                "max_tokens": 128,
+                "timeout": 5.0,
+                "chat_first": False,
+            })
+
+            assert result["answer"] == "Hello"
+            # Should have called _query twice (fallback due to 404)
+            assert mock_query.call_count == 2
+
+    def test_http_405_fallback(self):
+        """Test that HTTP 405 errors DO fallback to chat completions."""
+        request = Request(
+            "http://engine.test",
+            "model",
+            max_tokens=128,
+            timeout=5.0,
+            completions_only=False,
+            chat_first=False,
+        )
+
+        with patch.object(request, '_query') as mock_query:
+            # First call returns HTTP 405
+            # Second call succeeds
+            mock_query.side_effect = [
+                RuntimeError("GET http://engine.test/v1 failed (HTTP 405): Method Not Allowed"),
+                {"answer": "Hello", "prompt_tokens": 10, "output_tokens": 5, "ttft_ms": 100.0, "tpot_ms_per_token": 10.0, "total_latency_ms": 200.0, "throughput_tokens_per_s": 0.5}
+            ]
+
+            result = request._query_with_fallback({
+                "completions_only": False,
+                "model": "model",
+                "prompt": "test",
+                "max_tokens": 128,
+                "timeout": 5.0,
+                "chat_first": False,
+            })
+
+            assert result["answer"] == "Hello"
+            # Should have called _query twice (fallback due to 405)
+            assert mock_query.call_count == 2
 
     def test_missing_chat_template_error_variations(self):
         """Test that various error messages about missing chat templates are detected."""

@@ -346,7 +346,14 @@ class Request:
                     "chat API failed (no chat template); retrying with /v1/completions"
                 )
                 return self._query(request_data, chat=False)
-            if not _missing_chat_template(first_err):
+            # Only fall back if the error indicates the completions endpoint is unsupported
+            # (missing chat template) or returns HTTP 404/405 (endpoint truly missing)
+            error_msg = str(first_err).lower()
+            if not (
+                _missing_chat_template(first_err)
+                or "http 404" in error_msg
+                or "http 405" in error_msg
+            ):
                 raise
             _info("/v1/completions failed; retrying with /v1/chat/completions")
             try:
