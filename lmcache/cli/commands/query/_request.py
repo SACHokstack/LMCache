@@ -346,6 +346,8 @@ class Request:
                     "chat API failed (no chat template); retrying with /v1/completions"
                 )
                 return self._query(request_data, chat=False)
+            if not _missing_chat_template(first_err):
+                raise
             _info("/v1/completions failed; retrying with /v1/chat/completions")
             try:
                 return self._query(request_data, chat=True)
